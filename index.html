@@ -422,6 +422,7 @@
     }
 
     // EXTRACCIÓN CON GEMINI FLASH VISION
+// EXTRACCIÓN CON GEMINI FLASH VISION (CORREGIDA)
     async function analizarConIA(base64Data) {
       const { geminiKey } = obtenerConfigActual();
       const loader = document.getElementById('ai-loading');
@@ -429,57 +430,86 @@
 
       if (!geminiKey || geminiKey.includes("TU_CLAVE")) {
         loader.classList.add('hidden');
-        alert("Aviso: Configura tu clave API de Gemini en 'Configuración' o en el código para activar la lectura automática con IA.");
+        alert("Aviso: Configura tu clave API de Gemini válida en 'Configuración'.");
         return;
       }
 
       try {
         const rawBase64 = base64Data.split(',')[1];
-        const prompt = `Analiza este comprobante o factura de compra. Devuelve EXCLUSIVAMENTE un objeto JSON válido con este formato:
-        {
-          "fecha": "YYYY-MM-DD",
-          "numeroFactura": "texto del número de factura o comprobante",
-          "proveedor": "nombre comercial o razón social de quien emite",
-          "monto": 0.00,
-          "rubro": "Materiales y Suministros | Herramientas y Equipos | Combustible y Transporte | Alimentación y Viáticos | Servicios Profesionales | Mantenimiento y Reparación | Telecomunicaciones y TIC | Otros Gastos Generales"
-        }
-        Si no encuentras algún dato exacto, infiérelo de forma razonable. Solo devuelve JSON puro sin backticks ni markdown.`;
+        
+        const prompt = `Actúa como un experto contable. Analiza minuciosamente este comprobante, factura o nota de venta.
+Extrae los siguientes datos y responde ÚNICAMENTE con la estructura JSON requerida:
+- fecha: fecha de emisión en formato YYYY-MM-DD. Si no hay año, asume el año en curso.
+- numeroFactura: número secuencial o serie del comprobante (ej: 001-001-000012345).
+- proveedor: razón social o nombre comercial del emisor.
+- monto: valor numérico final a pagar (total). Solo el número decimal, sin símbolos de moneda.
+- rubro: clasifícalo en una de estas opciones exactas:
+  "Materiales y Suministros", "Herramientas y Equipos", "Combustible y Transporte", "Alimentación y Viáticos", "Servicios Profesionales", "Mantenimiento y Reparación", "Telecomunicaciones y TIC", "Otros Gastos Generales".`;
 
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+        // Endpoint corregido a modelo estable con soporte nativo de visión
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
+
+        const payload = {
+          contents: [{
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: "image/jpeg",
+                  data: rawBase64
+                }
+              }
+            ]
+          }],
+          generationConfig: {
+            responseMimeType: "application/json", // Fuerza a Gemini a devolver JSON nativo sin markdown
+            temperature: 0.1 // Máxima precisión determinística
+          }
+        };
+
+        const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: "image/jpeg", data: rawBase64 } }
-              ]
-            }]
-          })
+          body: JSON.stringify(payload)
         });
 
+        if (!response.ok) {
+          const errorDetalle = await response.json();
+          throw new Error(`Google API Error [${response.status}]: ${errorDetalle.error?.message || response.statusText}`);
+        }
+
         const resData = await response.json();
-        let textoRespuesta = resData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        textoRespuesta = textoRespuesta.replace(/```json/g, '').replace(/```/g, '').trim();
+        const textoRespuesta = resData.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (!textoRespuesta) {
+          throw new Error("La IA no devolvió contenido interpretable.");
+        }
 
         const json = JSON.parse(textoRespuesta);
 
+        // Asignación a los campos del formulario
         if (json.fecha) document.getElementById('campo-fecha').value = json.fecha;
         if (json.numeroFactura) document.getElementById('campo-numero').value = json.numeroFactura;
         if (json.proveedor) document.getElementById('campo-proveedor').value = json.proveedor;
-        if (json.monto) document.getElementById('campo-monto').value = parseFloat(json.monto).toFixed(2);
+        if (json.monto !== undefined && json.monto !== null) {
+          document.getElementById('campo-monto').value = parseFloat(json.monto).toFixed(2);
+        }
+        
         if (json.rubro) {
           const select = document.getElementById('campo-rubro');
           for (let i = 0; i < select.options.length; i++) {
-            if (select.options[i].value.toLowerCase().includes(json.rubro.toLowerCase())) {
+            if (select.options[i].value.toLowerCase() === json.rubro.toLowerCase() ||
+                select.options[i].value.toLowerCase().includes(json.rubro.toLowerCase())) {
               select.selectedIndex = i;
               break;
             }
           }
         }
+
       } catch (err) {
-        console.error("Error en IA Gemini:", err);
-        alert("No se pudo extraer la información automáticamente con IA. Puedes verificar tu clave o completar los campos manualmente.");
+        console.error("Error al procesar con IA:", err);
+        // Alerta con el motivo real para diagnóstico inmediato
+        alert(`Atención al leer la factura:\n${err.message}\n\nPuedes ingresar los datos manualmente mientras tanto.`);
       } finally {
         loader.classList.add('hidden');
       }
