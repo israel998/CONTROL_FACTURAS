@@ -324,11 +324,11 @@
   <!-- SCRIPT DE FUNCIONAMIENTO -->
   <script>
     // =========================================================================
-    // CONFIGURA AQUÍ TUS CREDENCIALES FIJAS PARA QUE NUNCA MÁS TE LAS PIDA
+    // CREDENCIALES POR DEFECTO (OPCIONAL: puedes pegarlas aquí o desde la web)
     // =========================================================================
     const CREDENCIALES_FIJAS = {
-      geminiKey: "AQ.Ab8RN6JMjAWSIzdW755hI2Vek35OOSm4aKVH6y29pdUuGpvAiQ", // <-- Pega tu API Key de Gemini aquí
-      appsScriptUrl: "https://script.google.com/macros/s/AKfycbyKajcW0F3CpP_ec640EOAV9tao1N0veNxKljfXjKnRwg7GB1ixRotMACSOy1RWrEBRTQ/exec" // <-- Pega tu URL de Apps Script aquí
+      geminiKey: "AQ.Ab8RN6JMjAWSIzdW755hI2Vek35OOSm4aKVH6y29pdUuGpvAiQ", // <-- Puedes pegar tu clave AIzaSy... aquí
+      appsScriptUrl: "https://script.google.com/macros/s/AKfycbyKajcW0F3CpP_ec640EOAV9tao1N0veNxKljfXjKnRwg7GB1ixRotMACSOy1RWrEBRTQ/exec" // <-- Puedes pegar tu URL https://script.google.com/.../exec aquí
     };
     // =========================================================================
 
@@ -352,7 +352,6 @@
     function inicializarCredenciales() {
       const { scriptUrl, geminiKey } = obtenerConfigActual();
 
-      // Guardar en almacenamiento local si no existían
       if (!localStorage.getItem('cfg_apps_script') && scriptUrl) {
         localStorage.setItem('cfg_apps_script', scriptUrl);
       }
@@ -360,11 +359,11 @@
         localStorage.setItem('cfg_gemini_key', geminiKey);
       }
 
-      document.getElementById('cfg-apps-script').value = scriptUrl;
-      document.getElementById('cfg-gemini-key').value = geminiKey;
+      document.getElementById('cfg-apps-script').value = scriptUrl || '';
+      document.getElementById('cfg-gemini-key').value = geminiKey || '';
 
       const estadoNube = document.getElementById('metrica-nube-estado');
-      if (scriptUrl && !scriptUrl.includes("TU_SCRIPT_ID")) {
+      if (scriptUrl && scriptUrl.startsWith("http")) {
         estadoNube.textContent = 'Drive Conectado';
         estadoNube.className = 'text-xs font-bold text-emerald-600 mt-2';
       } else {
@@ -421,73 +420,86 @@
       document.getElementById('file-input').value = '';
     }
 
-    // EXTRACCIÓN CON GEMINI FLASH VISION
-// EXTRACCIÓN CON GEMINI FLASH VISION (CORREGIDA)
+    // EXTRACCIÓN ROBUSTA CON GEMINI (ENDPOINT OFICIAL V1 + RESIDUAL FALLBACK)
     async function analizarConIA(base64Data) {
       const { geminiKey } = obtenerConfigActual();
       const loader = document.getElementById('ai-loading');
       loader.classList.remove('hidden');
 
-      if (!geminiKey || geminiKey.includes("TU_CLAVE")) {
+      if (!geminiKey || geminiKey.trim() === '') {
         loader.classList.add('hidden');
-        alert("Aviso: Configura tu clave API de Gemini válida en 'Configuración'.");
+        alert("Aviso: Configura tu clave API de Gemini en el botón 'Configuración' para activar la lectura con IA.");
         return;
       }
 
       try {
         const rawBase64 = base64Data.split(',')[1];
         
-        const prompt = `Actúa como un experto contable. Analiza minuciosamente este comprobante, factura o nota de venta.
-Extrae los siguientes datos y responde ÚNICAMENTE con la estructura JSON requerida:
-- fecha: fecha de emisión en formato YYYY-MM-DD. Si no hay año, asume el año en curso.
-- numeroFactura: número secuencial o serie del comprobante (ej: 001-001-000012345).
-- proveedor: razón social o nombre comercial del emisor.
-- monto: valor numérico final a pagar (total). Solo el número decimal, sin símbolos de moneda.
-- rubro: clasifícalo en una de estas opciones exactas:
-  "Materiales y Suministros", "Herramientas y Equipos", "Combustible y Transporte", "Alimentación y Viáticos", "Servicios Profesionales", "Mantenimiento y Reparación", "Telecomunicaciones y TIC", "Otros Gastos Generales".`;
-
-        // Endpoint corregido a modelo estable con soporte nativo de visión
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
+        const prompt = `Actúa como asistente contable. Analiza detalladamente este comprobante, factura o recibo.
+Extrae los siguientes datos y devuelve ÚNICAMENTE un JSON válido con estas claves:
+{
+  "fecha": "YYYY-MM-DD",
+  "numeroFactura": "número de factura o comprobante",
+  "proveedor": "razón social o nombre del emisor",
+  "monto": 0.00,
+  "rubro": "Materiales y Suministros | Herramientas y Equipos | Combustible y Transporte | Alimentación y Viáticos | Servicios Profesionales | Mantenimiento y Reparación | Telecomunicaciones y TIC | Otros Gastos Generales"
+}
+Si la fecha no contiene año, asume el año en curso. Devuelve exclusivamente JSON puro.`;
 
         const payload = {
           contents: [{
             parts: [
               { text: prompt },
-              {
-                inlineData: {
-                  mimeType: "image/jpeg",
-                  data: rawBase64
-                }
-              }
+              { inlineData: { mimeType: "image/jpeg", data: rawBase64 } }
             ]
           }],
           generationConfig: {
-            responseMimeType: "application/json", // Fuerza a Gemini a devolver JSON nativo sin markdown
-            temperature: 0.1 // Máxima precisión determinística
+            responseMimeType: "application/json",
+            temperature: 0.1
           }
         };
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+        // Lista de endpoints en cascada: primero v1 estable, luego v1beta como alternativa
+        const endpoints = [
+          `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`
+        ];
 
-        if (!response.ok) {
-          const errorDetalle = await response.json();
-          throw new Error(`Google API Error [${response.status}]: ${errorDetalle.error?.message || response.statusText}`);
+        let response = null;
+        let lastErrorText = "";
+
+        for (const url of endpoints) {
+          try {
+            response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+              lastErrorText = "";
+              break;
+            } else {
+              const errJson = await response.json().catch(() => ({}));
+              lastErrorText = errJson.error?.message || response.statusText;
+            }
+          } catch (e) {
+            lastErrorText = e.message;
+          }
+        }
+
+        if (!response || !response.ok) {
+          throw new Error(`Google API Error [${response?.status || 'Error'}]: ${lastErrorText || 'Servicio no disponible'}`);
         }
 
         const resData = await response.json();
         const textoRespuesta = resData.candidates?.[0]?.content?.parts?.[0]?.text;
         
-        if (!textoRespuesta) {
-          throw new Error("La IA no devolvió contenido interpretable.");
-        }
+        if (!textoRespuesta) throw new Error("La IA no devolvió contenido interpretable.");
 
         const json = JSON.parse(textoRespuesta);
 
-        // Asignación a los campos del formulario
         if (json.fecha) document.getElementById('campo-fecha').value = json.fecha;
         if (json.numeroFactura) document.getElementById('campo-numero').value = json.numeroFactura;
         if (json.proveedor) document.getElementById('campo-proveedor').value = json.proveedor;
@@ -508,7 +520,6 @@ Extrae los siguientes datos y responde ÚNICAMENTE con la estructura JSON requer
 
       } catch (err) {
         console.error("Error al procesar con IA:", err);
-        // Alerta con el motivo real para diagnóstico inmediato
         alert(`Atención al leer la factura:\n${err.message}\n\nPuedes ingresar los datos manualmente mientras tanto.`);
       } finally {
         loader.classList.add('hidden');
@@ -538,8 +549,7 @@ Extrae los siguientes datos y responde ÚNICAMENTE con la estructura JSON requer
 
       const { scriptUrl } = obtenerConfigActual();
 
-      // Enviar a Google Drive
-      if (scriptUrl && !scriptUrl.includes("TU_SCRIPT_ID")) {
+      if (scriptUrl && scriptUrl.startsWith("http")) {
         try {
           const payload = {
             fecha: nuevaCompra.fecha,
